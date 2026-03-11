@@ -5,8 +5,8 @@
 // Reads hook input from stdin (JSON with tool_name, tool_input).
 // Outputs JSON for Claude Code hook system.
 
-import { readFileSync, readdirSync, existsSync } from "fs";
-import { join, resolve } from "path";
+import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
 
 // Unescape YAML double-quoted string escapes
 function yamlUnescape(str) {
@@ -22,7 +22,6 @@ function parseFrontmatter(content) {
 
   // Parse simple key: value pairs
   let currentKey = null;
-  let currentArray = null;
   let currentObj = null;
   let inArray = false;
   let inObjArray = false;
@@ -59,10 +58,10 @@ function parseFrontmatter(content) {
     }
 
     // Array item (start of object) — check BEFORE simple string
-    if (inArray && line.match(/^  - \w+\s*:/)) {
+    if (inArray && line.match(/^  -\s+\w+\s*:/)) {
       inObjArray = true;
       currentObj = {};
-      const objMatch = line.match(/^  - (\w+)\s*:\s*(.*)$/);
+      const objMatch = line.match(/^  -\s+(\w+)\s*:\s*(.*)$/);
       if (objMatch) {
         let val = objMatch[2].trim();
         if (val.startsWith('"') && val.endsWith('"')) val = yamlUnescape(val.slice(1, -1));
@@ -74,8 +73,8 @@ function parseFrontmatter(content) {
     }
 
     // Array item (simple string) — after object check
-    if (inArray && !inObjArray && line.match(/^  - /)) {
-      const val = line.replace(/^  - /, "").trim();
+    if (inArray && !inObjArray && line.match(/^  -\s/)) {
+      const val = line.replace(/^  -\s+/, "").trim();
       if (!Array.isArray(result[currentKey])) result[currentKey] = [];
       result[currentKey].push(val);
       continue;
@@ -138,6 +137,7 @@ function loadEnforcementRules(projectDir) {
         paths: entry.paths || null,
         action: entry.action,
         message: entry.message,
+        skills: entry.skills || null,
       });
     }
   }
@@ -196,11 +196,84 @@ function evaluate(rules, toolName, toolInput) {
         ruleId: rule.ruleId,
         action: rule.action,
         message: rule.message,
+        skills: rule.skills,
       });
     }
   }
 
   return violations;
+}
+
+// Read the session-level injected skills state
+function readInjectedSkills(projectDir) {
+  const stateFile = join(projectDir, "tmp", ".injected-skills.json");
+  if (!existsSync(stateFile)) return [];
+  try {
+    return JSON.parse(readFileSync(stateFile, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+// Write the session-level injected skills state
+function writeInjectedSkills(projectDir, skills) {
+  const tmpDir = join(projectDir, "tmp");
+  if (!existsSync(tmpDir)) {
+    mkdirSync(tmpDir, { recursive: true });
+  }
+  writeFileSync(join(tmpDir, ".injected-skills.json"), JSON.stringify(skills));
+}
+
+// Strip YAML frontmatter from skill content
+function stripFrontmatter(content) {
+  const match = content.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+  if (match) return match[1].trim();
+  return content.trim();
+}
+
+// Read skill content for injection, deduplicating against already-injected skills
+function collectSkillContent(projectDir, injectViolations) {
+  const alreadyInjected = readInjectedSkills(projectDir);
+  const alreadySet = new Set(alreadyInjected);
+
+  // Gather all unique skill names from all inject violations
+  const allSkillNames = [];
+  for (const v of injectViolations) {
+    if (!v.skills) continue;
+    const skillList = Array.isArray(v.skills) ? v.skills : [v.skills];
+    for (const name of skillList) {
+      if (!alreadySet.has(name) && !allSkillNames.includes(name)) {
+        allSkillNames.push(name);
+      }
+    }
+  }
+
+  if (allSkillNames.length === 0) return null;
+
+  // Read skill files
+  const parts = [];
+  const injectedNow = [];
+  for (const name of allSkillNames) {
+    const skillPath = join(projectDir, ".orqa", "team", "skills", name, "SKILL.md");
+    if (!existsSync(skillPath)) continue;
+    try {
+      const raw = readFileSync(skillPath, "utf-8");
+      const content = stripFrontmatter(raw);
+      if (content) {
+        parts.push(content);
+        injectedNow.push(name);
+      }
+    } catch {
+      // Skip unreadable files silently
+    }
+  }
+
+  if (parts.length === 0) return null;
+
+  // Persist updated state
+  writeInjectedSkills(projectDir, [...alreadyInjected, ...injectedNow]);
+
+  return parts.join("\n\n---\n\n");
 }
 
 // Main
@@ -234,13 +307,30 @@ async function main() {
     process.exit(0);
   }
 
-  // Determine overall action
-  const hasBlock = violations.some((v) => v.action === "block");
-  const messages = violations.map((v) => `[${v.ruleId}] ${v.message}`);
-  const combinedMessage = messages.join("\n");
+  // Separate violations by action
+  const blockViolations = violations.filter((v) => v.action === "block");
+  const warnViolations = violations.filter((v) => v.action === "warn");
+  const injectViolations = violations.filter((v) => v.action === "inject");
+
+  // Collect skill content for inject entries (with session dedup)
+  const skillContent = injectViolations.length > 0
+    ? collectSkillContent(projectDir, injectViolations)
+    : null;
+
+  // Determine overall action: block > warn > inject-only
+  const hasBlock = blockViolations.length > 0;
+  const hasWarn = warnViolations.length > 0;
 
   if (hasBlock) {
-    // Output to stderr for blocking (exit code 2)
+    // Blocking: deny the tool call
+    const messages = [...blockViolations, ...warnViolations].map(
+      (v) => `[${v.ruleId}] ${v.message}`
+    );
+    const combinedMessage = [
+      ...messages,
+      ...(skillContent ? [skillContent] : []),
+    ].join("\n");
+
     const output = JSON.stringify({
       hookSpecificOutput: {
         permissionDecision: "deny",
@@ -249,12 +339,21 @@ async function main() {
     });
     process.stderr.write(output);
     process.exit(2);
-  } else {
-    // Output to stdout for warnings
+  } else if (hasWarn || skillContent) {
+    // Non-blocking: warn and/or inject skills
+    const messages = warnViolations.map((v) => `[${v.ruleId}] ${v.message}`);
+    const combinedMessage = [
+      ...messages,
+      ...(skillContent ? [skillContent] : []),
+    ].join("\n");
+
     const output = JSON.stringify({
       systemMessage: combinedMessage,
     });
     process.stdout.write(output);
+    process.exit(0);
+  } else {
+    // Inject entries had no new skills to inject (all already injected)
     process.exit(0);
   }
 }
