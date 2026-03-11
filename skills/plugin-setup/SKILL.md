@@ -5,6 +5,8 @@ description: |
   .claude/ infrastructure, migrates agents/skills/rules to .orqa/, registers
   the plugin, and sets up symlinks. Use when setting up OrqaStudio governance
   on a new or existing Claude Code project.
+layer: plugin
+user-invocable: true
 version: 0.1.0
 ---
 

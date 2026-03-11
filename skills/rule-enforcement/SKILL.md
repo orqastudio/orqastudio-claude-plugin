@@ -1,6 +1,8 @@
 ---
 name: Rule Enforcement
 description: Understands how OrqaStudio governance rules are mechanically enforced via the companion plugin.
+layer: plugin
+user-invocable: false
 version: 0.1.0
 ---
 
