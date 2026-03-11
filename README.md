@@ -12,7 +12,8 @@
 
 This plugin bridges OrqaStudio's governance framework with Claude Code's hook system:
 
-- **Rule enforcement** — Intercepts `Write`, `Edit`, and `Bash` tool calls and evaluates them against rules that have `enforcement` entries in their YAML frontmatter. Blocks or warns on violations.
+- **Rule enforcement** — Intercepts `Write`, `Edit`, and `Bash` tool calls and evaluates them against rules with `enforcement` entries in their YAML frontmatter. Blocks, warns, or injects domain knowledge on match.
+- **Skill injection** — When a rule has `action: inject`, the plugin reads the referenced SKILL.md files and returns their content as `systemMessage`, loading domain knowledge into the agent's context automatically.
 - **Session start checks** — Detects stale worktrees, uncommitted files, orphaned directories, and previous session state on session start.
 - **Stop checklist** — Reminds the agent to commit, update session state, and clean up before ending a session.
 - **Governance commands** — `/orqa` shows a governance summary (active rules, epics, tasks).
@@ -23,34 +24,55 @@ Rules in `.orqa/governance/rules/RULE-NNN.md` can have an `enforcement` array in
 
 ```yaml
 enforcement:
+  # Block or warn on pattern matches
   - event: file
-    pattern: "unwrap\\(\\)"
-    paths: ["src-tauri/src/**/*.rs"]
     action: block
+    conditions:
+      - field: file_path
+        pattern: "src-tauri/src/.*\\.rs$"
+      - field: new_text
+        pattern: "unwrap\\(\\)"
     message: "No unwrap() in production Rust code."
-  - event: bash
-    pattern: "git commit.*--no-verify"
-    action: block
-    message: "Never bypass pre-commit hooks."
+
+  # Inject domain skills when editing specific paths
+  - event: file
+    action: inject
+    conditions:
+      - field: file_path
+        pattern: "src-tauri/src/domain/"
+    skills:
+      - orqa-domain-services
+      - orqa-error-composition
+    message: "Injecting domain service skills."
+
+  # Document linter delegation (declarative, not executed)
+  - event: lint
+    pattern: "clippy::unwrap_used"
+    action: warn
+    message: "Enforced by clippy pedantic."
 ```
 
-The plugin's `PreToolUse` hook loads all active rules, parses their enforcement entries, and evaluates patterns against the tool call context. Violations are either blocked (tool call denied) or warned (message shown, tool call proceeds).
+The plugin's `PreToolUse` hook loads all active rules, parses their enforcement entries, and evaluates patterns against the tool call context.
+
+### Supported Actions
+
+| Action | Behavior |
+|--------|----------|
+| `block` | Tool call is denied with an error message |
+| `warn` | Warning message shown, tool call proceeds |
+| `inject` | Reads SKILL.md files and returns content as `systemMessage` (non-blocking) |
 
 ### Supported Event Types
 
 | Event | Triggered By | Pattern Matched Against |
 |-------|-------------|------------------------|
-| `file` | `Write`, `Edit` tool calls | File content (`new_string` for Edit, `content` for Write) |
-| `bash` | `Bash` tool calls | The command string |
+| `file` | `Write`, `Edit` tool calls | File path and content via `conditions` |
+| `bash` | `Bash` tool calls | The command string via `pattern` |
+| `lint` | Declarative only | Not executed — documents linter delegation |
 
-### Currently Enforced Rules
+### Skill Injection Deduplication
 
-| Rule | What It Catches | Action |
-|------|----------------|--------|
-| RULE-006 | `unwrap()`, `expect()`, `panic!()` in Rust production code | Block |
-| RULE-007 | Raw `cargo`/`npm run` commands instead of `make` targets | Warn |
-| RULE-013 | `--no-verify` on git commits, destructive git operations | Block/Warn |
-| RULE-020 | `TODO`/`FIXME`/`HACK`/`XXX` comments in production code | Warn |
+Skills injected via `action: inject` are tracked per session in `tmp/.injected-skills.json`. A skill is only injected once per session — subsequent matches for the same skill are silently skipped.
 
 ## Installation
 
@@ -160,12 +182,14 @@ To add enforcement to a rule:
 hooks/
   hooks.json           # Hook configuration
   scripts/
-    rule-engine.mjs    # Node.js rule enforcement engine
+    rule-engine.mjs    # Node.js rule enforcement engine (block/warn/inject)
     session-start.sh   # Session start health checks
     stop-checklist.sh  # Pre-stop checklist
 commands/
   orqa.md              # /orqa governance summary command
 skills/
+  plugin-setup/
+    SKILL.md           # Plugin installation and setup guide
   rule-enforcement/
     SKILL.md           # Rule enforcement skill documentation
 ```
