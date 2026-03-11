@@ -1,12 +1,77 @@
 #!/usr/bin/env bash
-# Session start hook — runs on SessionStart event
-# Reads orchestrator context and runs session health checks
+# OrqaStudio plugin — SessionStart hook
+# Sets up .claude/ symlinks and runs session health checks
 
 set -euo pipefail
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-.}"
+ORQA_DIR="$PROJECT_DIR/.orqa"
+CLAUDE_DIR="$PROJECT_DIR/.claude"
 
-# Only run once per session (guard file in tmp/)
+# ─── Symlink Setup ───────────────────────────────────────────────────────────
+# The plugin manages all .claude/ symlinks. .orqa/ is the single source of truth.
+# These symlinks are required by Claude Code's native discovery:
+#   CLAUDE.md  — project instructions (from orchestrator agent)
+#   rules/     — rules loaded as system context
+#   agents/    — agent definitions for subagent delegation
+#   skills/    — skill definitions for /skill commands
+
+create_symlink() {
+  local link="$1"
+  local target="$2"
+
+  # Detect OS for symlink creation
+  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "mingw"* || "$OSTYPE" == "cygwin" ]]; then
+    # Windows — use PowerShell for proper NTFS symlinks
+    local win_link
+    local win_target
+    win_link=$(cygpath -w "$link" 2>/dev/null || echo "$link")
+    win_target=$(cygpath -w "$target" 2>/dev/null || echo "$target")
+
+    if [ -d "$target" ]; then
+      powershell -Command "New-Item -ItemType SymbolicLink -Path '$win_link' -Target '$win_target' -Force" > /dev/null 2>&1
+    else
+      powershell -Command "New-Item -ItemType SymbolicLink -Path '$win_link' -Target '$win_target' -Force" > /dev/null 2>&1
+    fi
+  else
+    # Unix — standard ln -sfn
+    ln -sfn "$target" "$link"
+  fi
+}
+
+setup_symlink() {
+  local link="$1"
+  local target="$2"
+
+  # Skip if .orqa/ source doesn't exist
+  if [ ! -e "$target" ]; then
+    return
+  fi
+
+  # Already a correct symlink
+  if [ -L "$link" ]; then
+    return
+  fi
+
+  # Real file/dir exists — don't overwrite
+  if [ -e "$link" ]; then
+    return
+  fi
+
+  create_symlink "$link" "$target"
+}
+
+if [ -d "$ORQA_DIR" ]; then
+  mkdir -p "$CLAUDE_DIR"
+
+  setup_symlink "$CLAUDE_DIR/CLAUDE.md" "$ORQA_DIR/team/agents/orchestrator.md"
+  setup_symlink "$CLAUDE_DIR/rules"     "$ORQA_DIR/governance/rules"
+  setup_symlink "$CLAUDE_DIR/agents"    "$ORQA_DIR/team/agents"
+  setup_symlink "$CLAUDE_DIR/skills"    "$ORQA_DIR/team/skills"
+fi
+
+# ─── Session Guard ───────────────────────────────────────────────────────────
+# Only run health checks once per session
 GUARD="$PROJECT_DIR/tmp/.session-started"
 if [ -f "$GUARD" ]; then
   exit 0
@@ -14,6 +79,7 @@ fi
 mkdir -p "$PROJECT_DIR/tmp"
 touch "$GUARD"
 
+# ─── Health Checks ───────────────────────────────────────────────────────────
 OUTPUT=""
 
 # Check for stashes
@@ -54,8 +120,8 @@ if [ -f "$PROJECT_DIR/tmp/session-state.md" ]; then
 fi
 
 # Dogfood detection
-if [ -f "$PROJECT_DIR/.orqa/project.json" ]; then
-  if grep -q '"dogfood"[[:space:]]*:[[:space:]]*true' "$PROJECT_DIR/.orqa/project.json" 2>/dev/null; then
+if [ -f "$ORQA_DIR/project.json" ]; then
+  if grep -q '"dogfood"[[:space:]]*:[[:space:]]*true' "$ORQA_DIR/project.json" 2>/dev/null; then
     OUTPUT="${OUTPUT}DOGFOOD MODE ACTIVE: You are editing the app from the CLI.\n"
     OUTPUT="${OUTPUT}- CLI context: make restart does NOT end the session\n"
     OUTPUT="${OUTPUT}- Use make restart-tauri after Rust changes\n"
