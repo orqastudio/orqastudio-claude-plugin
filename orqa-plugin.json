@@ -1,6 +1,6 @@
 {
   "name": "@orqastudio/claude-integration",
-  "version": "0.2.0-dev",
+  "version": "0.1.0-dev",
   "displayName": "Claude Integration",
   "description": "Claude AI provider — Agent SDK sidecar + Claude Code governance hooks via @orqastudio/claude-code-cli.",
   "requires": [],
@@ -14,7 +14,12 @@
       "label": "Claude Agent SDK",
       "runtime": "node",
       "entrypoint": "sidecar/dist/sidecar.js",
-      "requires": [{ "binary": "node", "minVersion": "20.0.0" }]
+      "requires": [
+        {
+          "binary": "node",
+          "minVersion": "20.0.0"
+        }
+      ]
     },
     "hooks": [
       {
