@@ -1,7 +1,7 @@
 {
-  "name": "orqastudio-claude-plugin",
-  "version": "0.1.0-pre",
-  "description": "OrqaStudio governance companion plugin for Claude Code. Enforces rules, loads agent context, and provides governance commands.",
+  "name": "orqastudio-claude-integration",
+  "version": "0.1.0",
+  "description": "OrqaStudio governance companion plugin for Claude Code. Enforces rules, loads agent context, and provides governance commands. Includes Agent SDK sidecar.",
   "author": {
     "name": "OrqaStudio"
   }

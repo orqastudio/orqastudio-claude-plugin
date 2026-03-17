@@ -1,0 +1,27 @@
+{
+  "name": "@orqastudio/claude-integration",
+  "version": "0.1.0",
+  "displayName": "Claude Integration",
+  "description": "Claude AI provider — Agent SDK sidecar + Claude Code governance hooks.",
+  "provides": {
+    "schemas": [],
+    "views": [],
+    "widgets": [],
+    "relationships": [],
+    "sidecar": {
+      "key": "claude-agent",
+      "label": "Claude Agent SDK",
+      "runtime": "node",
+      "entrypoint": "sidecar/dist/sidecar.js",
+      "requires": [{ "binary": "node", "minVersion": "20.0.0" }]
+    },
+    "hooks": [
+      {
+        "key": "claude-session-start",
+        "event": "session-start",
+        "runtime": "system",
+        "entrypoint": "hooks/scripts/session-start.sh"
+      }
+    ]
+  }
+}
