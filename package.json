@@ -4,7 +4,7 @@
   "private": true,
   "description": "Claude AI provider for OrqaStudio — wraps Agent SDK sidecar + claude-code-cli governance.",
   "dependencies": {
-    "@orqastudio/claude-code-cli": "0.1.0-dev",
+    "@orqastudio/claude-code-cli": "^0.1.0-dev",
     "@anthropic-ai/claude-agent-sdk": "dev"
   }
 }
